@@ -1,0 +1,85 @@
+---
+  - name: Playbook to manage Docker and DNF packages
+    hosts: docker
+    become: true
+    tasks:
+      - name: Remove Docker-related packages
+        ansible.builtin.dnf:
+          name:
+            - docker
+            - docker-client
+            - docker-client-latest
+            - docker-common
+            - docker-latest
+            - docker-latest-logrotate
+            - docker-logrotate
+            - docker-selinux
+            - docker-engine-selinux
+            - docker-engine
+          state: absent
+  
+      - name: Check if dnf-plugins-core is installed
+        ansible.builtin.shell: "dnf list installed dnf-plugins-core"
+        register: dnf_plugins_core_check
+        failed_when: false
+  
+      - name: Install dnf-plugins-core if not installed
+        ansible.builtin.dnf:
+          name: dnf-plugins-core
+          state: present
+        when: dnf_plugins_core_check.rc != 0
+  
+      - name: Add Docker repository
+        ansible.builtin.command: "dnf-3 config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo"
+  
+      - name: Update repository metadata
+        ansible.builtin.command: "dnf-3 makecache"
+  
+      - name: Install Docker packages
+        ansible.builtin.dnf:
+          name:
+            - docker-ce
+            - docker-ce-cli
+            - containerd.io
+            - docker-buildx-plugin
+            - docker-compose-plugin
+          state: present
+  
+      - name: Check if /var has at least 10GB free space
+        ansible.builtin.shell: "df -h /var | awk 'NR==2 {print $4}'"
+        register: var_partition_size
+  
+      - name: Fail if /var does not have enough space
+        ansible.builtin.fail:
+          msg: "/var does not have at least 10GB free space."
+        when: var_partition_size.stdout is not regex('^([1-9][0-9]|[1-9])G$')
+  
+      - name: Post-installation - Create Docker user and setup permissions
+        block:
+          - name: Create Docker user
+            ansible.builtin.user:
+              name: docker
+              home: /home/docker
+              shell: /bin/bash
+              state: present
+  
+          - name: Add Docker user to sudoers group
+            ansible.builtin.user:
+              name: docker
+              groups: wheel
+              append: true
+  
+          - name: Ensure correct permissions for ~/.docker directory
+            ansible.builtin.file:
+              path: /home/docker/.docker
+              state: directory
+              owner: docker
+              group: docker
+              mode: '0700'
+  
+          - name: Enable Docker service on boot
+            ansible.builtin.systemd:
+              name: docker
+              enabled: true
+              state: started
+  
