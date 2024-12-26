@@ -1,0 +1,99 @@
+---
+- name: Setup NGINX proxy for Minikube Dashboard
+  hosts: docker
+  tasks:
+    - name: Check if Docker is installed
+      command: docker --version
+      register: docker_check
+      failed_when: docker_check.rc != 0
+      changed_when: false
+      ignore_errors: false
+      tags: check
+
+    - name: Install required packages
+      become: true
+      become_user: root
+      package:
+        name:
+          - firewalld
+          - conntrack
+        state: present
+
+    - name: Start and enable firewalld
+      become: true
+      become_user: root
+      service:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Open ports for Minikube and NGINX
+      become: true
+      become_user: root
+      firewalld:
+        port: "30000-32767/tcp"
+        state: enabled
+        permanent: true
+
+    - name: Reload firewalld
+      become: true
+      become_user: root
+      service:
+        name: firewalld
+        state: reloaded
+
+    - name: Check if Minikube is installed
+      command: /usr/local/bin/minikube version
+      register: minikube_check
+      failed_when: minikube_check.rc != 0
+      changed_when: false
+      ignore_errors: false
+
+    - name: Fail if Minikube is not installed
+      fail:
+        msg: "Minikube is not installed. Please install Minikube before running this playbook."
+      when: minikube_check.rc != 0
+
+    - name: Set alias for kubectl to use minikube's kubectl
+      lineinfile:
+        path: ~/.bashrc
+        line: 'alias kubectl="minikube kubectl --"'
+        state: present
+      become: false
+
+    - name: Source ~/.bashrc to make kubectl alias available
+      shell: source ~/.bashrc
+      become: false
+      ignore_errors: true
+
+    - name: Find all YAML files in the specified directory on the local machine
+      find:
+        paths: "/home/{{ lookup('env', 'USER') }}/kubernetes/Kubernetes-Objects/nginx-minikube/"
+        patterns: "*.yaml"
+      register: kubernetes_files
+      delegate_to: localhost  # Delegate find task to the local machine
+
+    - name: Copy YAML files from local to remote host as testuser
+      copy:
+        src: "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+        owner: testuser
+        group: docker
+        mode: '0600'
+      with_items: "{{ kubernetes_files.files }}"
+      when: kubernetes_files.matched > 0
+      become: true
+
+    - name: Apply Kubernetes configurations using kubectl on remote host as testuser
+      command: /usr/local/bin/minikube kubectl -- apply -f /tmp/{{ item.path | basename }}
+      with_items: "{{ kubernetes_files.files }}"
+      when: kubernetes_files.matched > 0
+      register: kubectl_apply_results
+      ignore_errors: false
+      become: true
+      become_user: testuser  # Ensure command runs as 'testuser'
+
+    - name: Display the result of kubectl apply commands
+      debug:
+        var: kubectl_apply_results.results
+      when: kubernetes_files.matched > 0

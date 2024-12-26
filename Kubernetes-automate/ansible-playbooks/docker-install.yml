@@ -2,6 +2,10 @@
   - name: Playbook to manage Docker and DNF packages
     hosts: docker
     become: true
+    vars:
+      docker_repo_url: "https://download.docker.com/linux/centos/docker-ce.repo"
+      docker_user: "docker"
+      docker_group: "wheel"
     tasks:
       - name: Remove Docker-related packages
         ansible.builtin.dnf:
@@ -30,7 +34,7 @@
         when: dnf_plugins_core_check.rc != 0
   
       - name: Add Docker repository
-        ansible.builtin.command: "dnf-3 config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo"
+        ansible.builtin.command: "dnf-3 config-manager --add-repo {{ docker_repo_url }}"
   
       - name: Update repository metadata
         ansible.builtin.command: "dnf-3 makecache"
@@ -58,23 +62,23 @@
         block:
           - name: Create Docker user
             ansible.builtin.user:
-              name: docker
-              home: /home/docker
+              name: "{{ docker_user }}"
+              home: "/home/{{ docker_user }}"
               shell: /bin/bash
               state: present
   
           - name: Add Docker user to sudoers group
             ansible.builtin.user:
-              name: docker
-              groups: wheel
+              name: "{{ docker_user }}"
+              groups: "{{ docker_group }}"
               append: true
   
           - name: Ensure correct permissions for ~/.docker directory
             ansible.builtin.file:
-              path: /home/docker/.docker
+              path: "/home/{{ docker_user }}/.docker"
               state: directory
-              owner: docker
-              group: docker
+              owner: "{{ docker_user }}"
+              group: "{{ docker_user }}"
               mode: '0700'
   
           - name: Enable Docker service on boot
