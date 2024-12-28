@@ -1,0 +1,48 @@
+---
+- name: Install and Configure NGINX and Certbot
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Install NGINX
+      package:
+        name: nginx
+        state: present
+
+    - name: Start and enable NGINX service
+      service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Install Certbot
+      package:
+        name: certbot
+        state: present
+
+    - name: Install NGINX plugin for Certbot
+      package:
+        name: python3-certbot-nginx
+        state: present
+
+    - name: Obtain SSL certificate using Certbot
+      command: certbot --nginx -d example.com --non-interactive --agree-tos --email your-email@example.com
+      register: certbot_result
+      when: ansible_facts['os_family'] == 'Debian'  # Use this when running on a Debian-based system
+      changed_when: "'Certificate not yet obtained' in certbot_result.stdout or 'Successfully' in certbot_result.stdout"
+
+    - name: Reload NGINX to apply SSL certificates
+      service:
+        name: nginx
+        state: reloaded
+
+    - name: Ensure NGINX is running
+      command: systemctl status nginx
+      register: nginx_status
+      changed_when: false
+      failed_when: false
+
+    - name: Check if NGINX is running
+      debug:
+        msg: "NGINX is running"
+      when: "'running' in nginx_status.stdout"

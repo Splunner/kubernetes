@@ -1,0 +1,96 @@
+- name: Setup NGINX proxy with SSL and Certbot for domain
+  hosts: all
+  become: true
+
+  vars:
+    domain_name: "example.com"
+    certbot_email: "youremail@example.com"
+    proxy_pass_url: "http://localhost"
+    proxy_port: "8080"
+    certbot_challenge_root: "/var/www/certbot"
+    ssl_certificate_path: "/etc/letsencrypt/live/{{ domain_name }}/fullchain.pem"
+    ssl_certificate_key_path: "/etc/letsencrypt/live/{{ domain_name }}/privkey.pem"
+    ssl_dhparam_path: "/etc/ssl/certs/dhparam.pem"
+    skip_domain_check: false  # Default to false, only set to true if needed
+
+  tasks:
+    - name: Ensure Certbot is installed
+      package:
+        name: certbot
+        state: present
+
+    - name: Ensure host and dig are installed
+      package:
+        name:
+          - bind-utils   # For dig and host on most RHEL-based systems
+        state: present
+      register: install_bind_utils
+      ignore_errors: true  # Continue play even if the package installation fails
+
+    - name: Set skip_domain_check to true if bind-utils (dig or host) are not installed
+      set_fact:
+        skip_domain_check: true
+      when: install_bind_utils.failed or "'dig' not in ansible_facts.packages or 'host' not in ansible_facts.packages"
+
+    - name: Check if SSL certificate exists
+      stat:
+        path: "{{ ssl_certificate_path }}"
+      register: ssl_certificate_exists
+
+    - name: Check if SSL certificate key exists
+      stat:
+        path: "{{ ssl_certificate_key_path }}"
+      register: ssl_certificate_key_exists
+
+    - name: Check if DH param file exists
+      stat:
+        path: "{{ ssl_dhparam_path }}"
+      register: ssl_dhparam_exists
+
+    - name: Ensure the DH parameters file exists
+      stat:
+        path: "{{ ssl_dhparam_path }}"
+      register: ssl_dhparam_exists
+
+    - name: Generate DH parameters if not present
+      command: "openssl dhparam -out {{ ssl_dhparam_path }} 2048"
+      when: not ssl_dhparam_exists.stat.exists
+
+    - name: Ensure correct ownership and permissions for DH parameters file
+      file:
+        path: "{{ ssl_dhparam_path }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Obtain SSL certificates using Certbot with NGINX plugin
+      command: certbot --nginx -d "{{ domain_name }}" --email "{{ certbot_email }}" --agree-tos --non-interactive
+      when: not ssl_certificate_exists.stat.exists or not ssl_certificate_key_exists.stat.exists
+
+    - name: Check if the server's IP resolves for the domain using dig
+      command: dig +short "{{ domain_name }}"
+      register: dig_result
+      changed_when: false
+      failed_when: false
+      when: skip_domain_check | default(false) == false
+
+    - name: Ensure the domain resolves to the server's IP
+      fail:
+        msg: "The domain {{ domain_name }} does not resolve to the server's IP {{ ansible_host }}"
+      when: (skip_domain_check | default(false)) == false and (dig_result.stdout | length == 0 or ansible_host not in dig_result.stdout)
+
+    - name: Create NGINX config for domain proxy using template
+      template:
+        src: "nginx_proxy_template.j2"
+        dest: "/etc/nginx/conf.d/{{ domain_name }}.conf"
+        mode: '0644'
+
+    - name: Test NGINX configuration
+      command: nginx -t
+      register: nginx_test_result
+      failed_when: nginx_test_result.rc != 0
+
+    - name: Reload NGINX to apply configuration
+      service:
+        name: nginx
+        state: reloaded
